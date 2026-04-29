@@ -1,6 +1,5 @@
 import os
 import sys
-import io
 import time
 import json
 from pathlib import Path
@@ -8,11 +7,19 @@ from datetime import datetime
 
 import yaml
 from fyers_apiv3.FyersWebsocket import data_ws
+from src.components import stream_server
 
-# ── Force UTF-8 stdout on Windows ─────────────────────────────────────────────
+# ── Force UTF-8 stdout/stderr on Windows (without re-wrapping streams) ───────
+# Re-wrapping sys.stderr can trigger "lost sys.stderr" during interpreter shutdown.
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        # If reconfigure isn't supported, leave streams as-is.
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -489,6 +496,9 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
                 f"{'-' * 72}"
             )
 
+            # Broadcast closed candle to the dashboard (SSE)
+            stream_server.broadcast({**closed, "type": "closed"})
+
         # ── Live candle → update both displays ─────────────────────────────
         live = builder.current_candle_live()
         if live:
@@ -522,6 +532,13 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
                 qty_ratio    = limits["qty_ratio"],
                 ord_sz_ratio = limits["order_size_ratio"],
             )
+
+            # Broadcast live candle to the dashboard (SSE)
+            stream_server.broadcast({
+                **live,
+                "type": "live",
+                "progress": progress,
+            })
 
     # Bug 4 fix — safe error/close message handling
     def on_error(message):
