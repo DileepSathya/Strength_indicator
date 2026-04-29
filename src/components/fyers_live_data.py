@@ -26,7 +26,7 @@ if sys.platform == "win32":
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
 
-SYMBOLS        = ["NSE:ASIANPAINT-EQ", "NSE:HEROMOTOCO-EQ"]
+SYMBOLS        = ["NSE:ASIANPAINT-EQ", "NSE:HEROMOTOCO-EQ","NSE:SBIN-EQ"]
 CANDLE_MINUTES = 5                                   # ← change to 1, 3, 5, 15 freely
 ARTIFACTS_PATH = Path("artifacts/candle_data.json")
 SUMMARY_FILE   = Path("artifacts/live_summary.txt")

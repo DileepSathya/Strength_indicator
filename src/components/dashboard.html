@@ -73,15 +73,22 @@
 <div id="log"><em style="color:#334155;font-size:11px">Closed candles will appear here…</em></div>
 
 <script>
-// ── Symbols must exactly match SYMBOLS in stream.py ──────────────────────────
+// Seed known symbols, but also allow the page to add new rows dynamically
+// when the server starts streaming symbols that were not in this initial list.
 const SYMBOLS = [
   "NSE:ASIANPAINT-EQ",
   "NSE:HEROMOTOCO-EQ"
 ];
 
-// build table rows on load
 const tbody = document.getElementById("tbody");
-SYMBOLS.forEach(s => {
+
+function ensureRow(s) {
+  if (document.getElementById("row-" + s)) return;
+
+  if (!SYMBOLS.includes(s)) {
+    SYMBOLS.push(s);
+  }
+
   const tr = document.createElement("tr");
   tr.id = "row-" + s;
   tr.innerHTML = `
@@ -94,7 +101,9 @@ SYMBOLS.forEach(s => {
     <td id="prg-${s}" class="prog">—</td>
   `;
   tbody.appendChild(tr);
-});
+}
+
+SYMBOLS.forEach(ensureRow);
 
 function signal(agg, qty, osz) {
   if (qty === 0 || osz === 0) return '<span class="badge load">LOADING</span>';
@@ -113,8 +122,7 @@ function fmt(n, dec=2) { return Number(n).toFixed(dec); }
 
 function applyLive(d) {
   const s = d.symbol;
-  // Guard: ignore symbols not in our table
-  if (!SYMBOLS.includes(s)) return;
+  ensureRow(s);
 
   const agg = d.aggression.score, qty = d.limit_orders.qty_ratio,
         osz = d.limit_orders.order_size_ratio;
@@ -156,6 +164,7 @@ function applyTf(tf) {
 }
 
 function appendClosed(d) {
+  ensureRow(d.symbol);
   const log = document.getElementById("log");
   if (log.querySelector("em")) log.innerHTML = "";
   const agg = d.aggression.score;
