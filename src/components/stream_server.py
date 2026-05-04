@@ -39,14 +39,6 @@ DASHBOARD_PORT = 5050
 if not DASHBOARD_HTML.exists():
     DASHBOARD_HTML = Path("dashboard.html")
 
-BULL = "[BUY]"
-BEAR = "[SEL]"
-NEUT = "[NEU]"
-OK   = "[CLOSED]"
-ERR  = "[ERROR]"
-CONN = "[DISCONNECTED]"
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # SSE BROADCAST HUB
 # Keeps a set of per-client queues; push() fans out to all connected browsers.
@@ -157,7 +149,6 @@ def start_dashboard_server():
     server = HTTPServer(("0.0.0.0", DASHBOARD_PORT), DashboardHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
-    print(f"[DASHBOARD] http://localhost:{DASHBOARD_PORT}  (opens automatically)")
     # Try to open browser automatically
     try:
         import webbrowser
@@ -348,6 +339,11 @@ class CandleBuilder:
         sell_vol   = sum(t["vol_delta"] for t in valid if t["aggressor"] == "SELL")
         total_aggr = buy_vol + sell_vol
         score      = round((buy_vol - sell_vol) / total_aggr, 4) if total_aggr > 0 else 0.0
+        if volume <= 0:
+            buy_pct, sell_pct = 0.0, 0.0
+        else:
+            buy_pct  = round(buy_vol * 100 / volume, 4)
+            sell_pct = round(sell_vol * 100 / volume, 4)
 
         last            = ticks[-1]
         tot_buy_qty     = last.get("tot_buy_qty",     0)
@@ -377,9 +373,11 @@ class CandleBuilder:
                 "volume": volume,
             },
             "aggression": {
-                "score":       score,
-                "buy_volume":  buy_vol,
-                "sell_volume": sell_vol,
+                "score":            score,
+                "buy_volume":       buy_vol,
+                "sell_volume":      sell_vol,
+                "buy_percentage":   buy_pct,
+                "sell_percentage":  sell_pct,
             },
             "limit_orders": {
                 "total_bid_qty":      tot_buy_qty,
@@ -392,7 +390,37 @@ class CandleBuilder:
                 "avg_ask_order_size": avg_ask_order_size,
                 "order_size_ratio":   order_size_ratio,
             },
+            "signal": "0",
         }
+
+    def _apply_signal(self, candle: dict, prev_candle: dict | None) -> dict:
+        signal = "0"
+        if prev_candle:
+            curr_volume = candle["ohlcv"]["volume"]
+            prev_volume = prev_candle["ohlcv"]["volume"]
+            curr_agg = candle["aggression"]
+            prev_agg = prev_candle["aggression"]
+            curr_buy_pct = curr_agg.get("buy_percentage", 0.0)
+            curr_sell_pct = curr_agg.get("sell_percentage", 0.0)
+            prev_buy_pct = prev_agg.get("buy_percentage", 0.0)
+            prev_sell_pct = prev_agg.get("sell_percentage", 0.0)
+
+            if (
+                curr_volume > prev_volume
+                and curr_buy_pct > curr_sell_pct
+                and curr_buy_pct > 60
+                and curr_agg.get("buy_volume", 0) > prev_buy_pct
+            ):
+                signal = "1"
+            elif (
+                curr_volume > prev_volume
+                and curr_sell_pct > curr_buy_pct
+                and curr_sell_pct > 60
+                and curr_agg.get("sell_volume", 0) > prev_sell_pct
+            ):
+                signal = "-1"
+        candle["signal"] = signal
+        return candle
 
     def push(self, raw_tick: dict) -> dict | None:
         ts     = raw_tick["last_traded_time"]
@@ -401,6 +429,8 @@ class CandleBuilder:
         closed_candle = None
         if self.current_bucket is not None and bucket != self.current_bucket:
             closed_candle = self._build_candle(self.current_bucket, self.ticks)
+            prev_candle = self.closed_candles[-1] if self.closed_candles else None
+            closed_candle = self._apply_signal(closed_candle, prev_candle)
             self.closed_candles.append(closed_candle)
             self.ticks = []
 
@@ -426,7 +456,9 @@ class CandleBuilder:
     def current_candle_live(self) -> dict | None:
         if not self.ticks or self.current_bucket is None:
             return None
-        return self._build_candle(self.current_bucket, self.ticks)
+        candle = self._build_candle(self.current_bucket, self.ticks)
+        prev_candle = self.closed_candles[-1] if self.closed_candles else None
+        return self._apply_signal(candle, prev_candle)
 
     def candle_progress(self) -> str:
         if not self.ticks:
@@ -577,7 +609,6 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
 
         builder = builders.get(symbol)
         if builder is None:
-            display.print_closed(f"\n[WARN] New builder created for {symbol} mid-session")
             builders[symbol] = CandleBuilder(candle_minutes=CANDLE_MINUTES)
             builder = builders[symbol]
 
@@ -586,39 +617,30 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
         # ── Closed candle → save + push to dashboard ───────────────────────
         if closed:
             candle_store.append(closed)
-            display.print_closed(
-                f"\n{OK} [{symbol}]  "
-                f"[{closed['candle_open']} - {closed['candle_close']}]  "
-                f"({closed['timeframe']})\n"
-                f"{json.dumps(closed, indent=2)}\n"
-                f"{'-' * 72}"
-            )
+            display.print_closed(json.dumps(closed, indent=2))
+            closed_ts = datetime.fromtimestamp(tick["last_traded_time"]).strftime("%Y-%m-%d %H:%M:%S")
             # ★ Push closed candle to all dashboard browsers
-            _hub.push({**closed, "type": "closed"})
+            _hub.push({**closed, "type": "closed", "timestamp": closed_ts})
 
         # ── Live candle → update terminal + push to dashboard ──────────────
         live = builder.current_candle_live()
         if live:
             agg      = live["aggression"]
-            ohlcv    = live["ohlcv"]
             limits   = live["limit_orders"]
             score    = agg["score"]
-            arrow    = BULL if score > 0.3 else BEAR if score < -0.3 else NEUT
             progress = builder.candle_progress()
+            ts_txt   = datetime.fromtimestamp(tick["last_traded_time"]).strftime("%Y-%m-%d %H:%M:%S")
+            buy_pct  = agg.get("buy_percentage", 0.0)
+            sell_pct = agg.get("sell_percentage", 0.0)
+            signal   = live.get("signal", "0")
 
-            # Terminal
-            display.update_live(symbol,
-                f"{arrow} [{symbol:<22}]  "
-                f"{live['candle_open']}  "
-                f"O:{ohlcv['open']:<10}  "
-                f"H:{ohlcv['high']:<10}  "
-                f"L:{ohlcv['low']:<10}  "
-                f"C:{ohlcv['close']:<10}  "
-                f"V:{ohlcv['volume']:<8}  "
-                f"AGG:{score:+.4f}  "
-                f"B:{agg['buy_volume']:<8}  "
-                f"S:{agg['sell_volume']:<8}  "
-                f"[{progress}]"
+            display.update_live(
+                symbol,
+                f"{symbol}  {ts_txt}  "
+                f"aggression:{score:+.4f}  "
+                f"buy_percentage:{buy_pct:.4f}  "
+                f"sell_percentage:{sell_pct:.4f}  "
+                f"signal:{signal}",
             )
 
             summary.update(
@@ -632,24 +654,19 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
             # ★ Push live candle to all dashboard browsers
             _hub.push({
                 **live,
-                "type":     "live",
-                "progress": progress,
+                "type":      "live",
+                "progress":  progress,
+                "timestamp": ts_txt,
             })
 
     def on_error(message):
-        msg = json.dumps(message, indent=2) if isinstance(message, dict) else str(message)
-        display.print_closed(f"\n{ERR}\n{msg}")
+        pass
 
     def on_close(message):
-        msg = json.dumps(message, indent=2) if isinstance(message, dict) else str(message)
-        display.print_closed(f"\n{CONN}\n{msg}")
+        pass
 
     def on_open():
         display.reset()
-        display.print_closed(
-            f"[CONNECTED] {CANDLE_MINUTES}-min candles | "
-            f"Subscribing to {SYMBOLS}\n"
-        )
         fyers.subscribe(symbols=SYMBOLS, data_type="SymbolUpdate")
         fyers.subscribe(symbols=SYMBOLS, data_type="DepthUpdate")
         fyers.keep_running()

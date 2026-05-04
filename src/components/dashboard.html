@@ -24,30 +24,21 @@
   th { padding: 8px 12px; text-align: right; color: #64748b; font-weight: 500;
        font-size: 11px; letter-spacing: .04em; border-bottom: 1px solid #1e2530;
        white-space: nowrap }
-  th:first-child { text-align: left }
+  th:first-child, th:nth-child(2) { text-align: left }
   td { padding: 9px 12px; text-align: right; border-bottom: 1px solid #171b22;
        white-space: nowrap }
-  td:first-child { text-align: left; color: #cbd5e1; font-weight: 500 }
+  td:first-child, td:nth-child(2) { text-align: left; color: #cbd5e1; font-weight: 500 }
   tr:hover td { background: #131720 }
 
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
-           font-size: 11px; font-weight: 700; letter-spacing: .04em }
-  .buy  { background: #14271a; color: #4ade80; border: 1px solid #166534 }
-  .sell { background: #2a1215; color: #f87171; border: 1px solid #7f1d1d }
-  .neut { background: #1a1f2e; color: #94a3b8; border: 1px solid #334155 }
-  .load { background: #1a1e28; color: #64748b; border: 1px solid #2d3748 }
-
   .up { color: #4ade80 } .dn { color: #f87171 } .mt { color: #94a3b8 }
-  .prog { font-size: 10px; color: #475569 }
   .flash { animation: flash .4s ease-out }
   @keyframes flash { 0%{background:#1e3a2f} 100%{background:transparent} }
 
   #log { padding: 12px 16px; border-top: 1px solid #1e2530; max-height: 260px;
          overflow-y: auto }
-  .log-entry { font-size: 11px; color: #64748b; border-left: 2px solid #334155;
+  .log-entry { font-size: 11px; color: #94a3b8; border-left: 2px solid #334155;
                padding: 4px 10px; margin-bottom: 6px }
   .log-entry .sym { color: #7dd3fc; font-weight: 600 }
-  .log-entry .buy-tag { color: #4ade80 } .log-entry .sel-tag { color: #f87171 }
 </style>
 </head>
 <body>
@@ -57,15 +48,13 @@
   <div class="status">
     <div class="dot" id="dot"></div>
     <span id="conn-label">connecting…</span>
-    <span id="tf-label"></span>
   </div>
 </div>
 
 <table>
   <thead><tr>
-    <th>Symbol</th><th>LTP</th><th>Open</th><th>High</th><th>Low</th>
-    <th>Volume</th><th>Aggression</th><th>Qty Ratio</th>
-    <th>OrdSz Ratio</th><th>Signal</th><th>Progress</th>
+    <th>Symbol</th><th>Timestamp</th><th>Aggression</th>
+    <th>Buy %</th><th>Sell %</th><th>Signal</th>
   </tr></thead>
   <tbody id="tbody"></tbody>
 </table>
@@ -73,8 +62,6 @@
 <div id="log"><em style="color:#334155;font-size:11px">Closed candles will appear here…</em></div>
 
 <script>
-// Seed known symbols, but also allow the page to add new rows dynamically
-// when the server starts streaming symbols that were not in this initial list.
 const SYMBOLS = [
   "NSE:ASIANPAINT-EQ",
   "NSE:HEROMOTOCO-EQ"
@@ -93,74 +80,47 @@ function ensureRow(s) {
   tr.id = "row-" + s;
   tr.innerHTML = `
     <td>${s}</td>
-    <td id="ltp-${s}">—</td><td id="o-${s}">—</td>
-    <td id="h-${s}">—</td><td id="l-${s}">—</td>
-    <td id="v-${s}">—</td><td id="agg-${s}">—</td>
-    <td id="qty-${s}">—</td><td id="osz-${s}">—</td>
-    <td id="sig-${s}"><span class="badge load">LOADING</span></td>
-    <td id="prg-${s}" class="prog">—</td>
+    <td id="ts-${s}">—</td>
+    <td id="agg-${s}">—</td>
+    <td id="bpct-${s}">—</td>
+    <td id="spct-${s}">—</td>
+    <td id="sig-${s}">0</td>
   `;
   tbody.appendChild(tr);
 }
 
 SYMBOLS.forEach(ensureRow);
 
-function signal(agg, qty, osz) {
-  if (qty === 0 || osz === 0) return '<span class="badge load">LOADING</span>';
-  const bull = (agg > .3) + (qty > 1.2) + (osz > 1.2);
-  const bear = (agg < -.3) + (qty < .8) + (osz < .8);
-  if (bull >= 2) return '<span class="badge buy">BUY BIAS</span>';
-  if (bear >= 2) return '<span class="badge sell">SELL BIAS</span>';
-  return '<span class="badge neut">NEUTRAL</span>';
+function clsAgg(v) {
+  return v > 0.3 ? "up" : v < -0.3 ? "dn" : "mt";
 }
 
-function cls(v, upThr=0, dnThr=0) {
-  return v > upThr ? "up" : v < dnThr ? "dn" : "mt";
-}
-
-function fmt(n, dec=2) { return Number(n).toFixed(dec); }
+function fmt(n, dec) { return Number(n).toFixed(dec); }
 
 function applyLive(d) {
   const s = d.symbol;
   ensureRow(s);
 
-  const agg = d.aggression.score, qty = d.limit_orders.qty_ratio,
-        osz = d.limit_orders.order_size_ratio;
-  const o = d.ohlcv, ltp = o.close;
+  const agg = d.aggression.score;
+  const buyPct = d.aggression.buy_percentage ?? 0;
+  const sellPct = d.aggression.sell_percentage ?? 0;
+  const signal = d.signal ?? "0";
+  const ts = d.timestamp || "—";
 
-  document.getElementById(`ltp-${s}`).className  = cls(agg,.1,-.1);
-  document.getElementById(`ltp-${s}`).textContent = fmt(ltp,2);
-  document.getElementById(`o-${s}`).textContent   = fmt(o.open,2);
-  document.getElementById(`h-${s}`).className     = "up";
-  document.getElementById(`h-${s}`).textContent   = fmt(o.high,2);
-  document.getElementById(`l-${s}`).className     = "dn";
-  document.getElementById(`l-${s}`).textContent   = fmt(o.low,2);
-  document.getElementById(`v-${s}`).textContent   = o.volume.toLocaleString();
+  document.getElementById(`ts-${s}`).textContent = ts;
 
   const aggEl = document.getElementById(`agg-${s}`);
-  aggEl.className  = cls(agg,.3,-.3);
-  aggEl.textContent = (agg >= 0 ? "+" : "") + fmt(agg,4);
+  aggEl.className = clsAgg(agg);
+  aggEl.textContent = (agg >= 0 ? "+" : "") + fmt(agg, 4);
 
-  const qtyEl = document.getElementById(`qty-${s}`);
-  qtyEl.className  = cls(qty,1.2,.8);
-  qtyEl.textContent = fmt(qty,4);
+  document.getElementById(`bpct-${s}`).textContent = fmt(buyPct, 4);
+  document.getElementById(`spct-${s}`).textContent = fmt(sellPct, 4);
+  document.getElementById(`sig-${s}`).textContent = String(signal);
 
-  const oszEl = document.getElementById(`osz-${s}`);
-  oszEl.className  = cls(osz,1.2,.8);
-  oszEl.textContent = fmt(osz,4);
-
-  document.getElementById(`sig-${s}`).innerHTML  = signal(agg,qty,osz);
-  document.getElementById(`prg-${s}`).textContent = d.progress || "—";
-
-  // flash row on update
   const row = document.getElementById("row-" + s);
   row.classList.remove("flash");
   void row.offsetWidth;
   row.classList.add("flash");
-}
-
-function applyTf(tf) {
-  document.getElementById("tf-label").textContent = tf + " candles";
 }
 
 function appendClosed(d) {
@@ -168,26 +128,21 @@ function appendClosed(d) {
   const log = document.getElementById("log");
   if (log.querySelector("em")) log.innerHTML = "";
   const agg = d.aggression.score;
-  const tag = agg > .3
-    ? `<span class="buy-tag">[BUY]</span>`
-    : agg < -.3
-    ? `<span class="sel-tag">[SEL]</span>`
-    : `<span>[NEU]</span>`;
+  const buyPct = d.aggression.buy_percentage ?? 0;
+  const sellPct = d.aggression.sell_percentage ?? 0;
+  const signal = d.signal ?? "0";
+  const ts = d.timestamp || "—";
   const div = document.createElement("div");
   div.className = "log-entry";
-  div.innerHTML = `
-    [CLOSED] <span class="sym">${d.symbol}</span>
-    ${d.candle_open}–${d.candle_close} (${d.timeframe})
-    &nbsp; O:${d.ohlcv.open} H:${d.ohlcv.high} L:${d.ohlcv.low} C:${d.ohlcv.close}
-    Vol:${d.ohlcv.volume.toLocaleString()}
-    &nbsp; AGG:${tag}${Number(agg).toFixed(4)}
-    QtyR:${Number(d.limit_orders.qty_ratio).toFixed(4)}
-    OszR:${Number(d.limit_orders.order_size_ratio).toFixed(4)}
-  `;
+  div.innerHTML =
+    `<span class="sym">${d.symbol}</span>  ${ts}  ` +
+    `aggression:${(agg >= 0 ? "+" : "") + Number(agg).toFixed(4)}  ` +
+    `buy_percentage:${Number(buyPct).toFixed(4)}  ` +
+    `sell_percentage:${Number(sellPct).toFixed(4)}  ` +
+    `signal:${signal}`;
   log.prepend(div);
 }
 
-// SSE connection — auto-reconnects on drop
 function connect() {
   const dot = document.getElementById("dot");
   const lbl = document.getElementById("conn-label");
@@ -204,7 +159,7 @@ function connect() {
   es.onmessage = e => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === "live")   { applyTf(msg.timeframe); applyLive(msg); }
+      if (msg.type === "live") applyLive(msg);
       if (msg.type === "closed") appendClosed(msg);
       if (msg.type === "status") lbl.textContent = msg.text;
     } catch {}

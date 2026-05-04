@@ -72,6 +72,11 @@ def build_1min_candles(ticks: list[dict]) -> list[dict]:
             if total_aggr_vol > 0
             else 0.0
         )
+        if volume <= 0:
+            buy_pct, sell_pct = 0.0, 0.0
+        else:
+            buy_pct = round(buy_vol * 100 / volume, 4)
+            sell_pct = round(sell_vol * 100 / volume, 4)
 
         # -- Limit Order Book (last tick is most recent snapshot) -----------
         last_tick = bucket[-1]
@@ -98,13 +103,41 @@ def build_1min_candles(ticks: list[dict]) -> list[dict]:
                     "score": aggression_score,
                     "buy_volume": buy_vol,
                     "sell_volume": sell_vol,
+                    "buy_percentage": buy_pct,
+                    "sell_percentage": sell_pct,
                 },
                 "limit_orders": {
                     "total_buy_qty": tot_buy_qty,
                     "total_sell_qty": tot_sell_qty,
                     "buy_sell_ratio": limit_order_ratio,
                 },
+                "signal": "0",
             }
         )
+
+        if len(candles) > 1:
+            prev = candles[-2]
+            curr = candles[-1]
+            curr_agg = curr["aggression"]
+            prev_agg = prev["aggression"]
+            curr_buy_pct = curr_agg.get("buy_percentage", 0.0)
+            curr_sell_pct = curr_agg.get("sell_percentage", 0.0)
+            prev_buy_pct = prev_agg.get("buy_percentage", 0.0)
+            prev_sell_pct = prev_agg.get("sell_percentage", 0.0)
+
+            if (
+                curr["ohlcv"]["volume"] > prev["ohlcv"]["volume"]
+                and curr_buy_pct > curr_sell_pct
+                and curr_buy_pct > 60
+                and curr_agg.get("buy_volume", 0) > prev_buy_pct
+            ):
+                curr["signal"] = "1"
+            elif (
+                curr["ohlcv"]["volume"] > prev["ohlcv"]["volume"]
+                and curr_sell_pct > curr_buy_pct
+                and curr_sell_pct > 60
+                and curr_agg.get("sell_volume", 0) > prev_sell_pct
+            ):
+                curr["signal"] = "-1"
 
     return candles
