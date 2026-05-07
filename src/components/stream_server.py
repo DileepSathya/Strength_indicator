@@ -209,6 +209,7 @@ class SummaryDisplay:
         f"{'Symbol':<24}"
         f"{'DeltaPct':>12}"
         f"{'CumDelta':>12}"
+        f"{'CumDeltaChange%':>18}"
         f"{'QtyRatio':>12}"
         f"{'OrdSzRatio':>12}"
         f"  {'Signal'}"
@@ -233,7 +234,16 @@ class SummaryDisplay:
             return "[SELL BIAS]"
         return "[NEUTRAL  ]"
 
-    def update(self, symbol: str, ts: int, delta_pct: float, cum_delta: int, qty_ratio: float, ord_sz_ratio: float):
+    def update(
+        self,
+        symbol: str,
+        ts: int,
+        delta_pct: float,
+        cum_delta: int,
+        cum_delta_change_pct: float,
+        qty_ratio: float,
+        ord_sz_ratio: float,
+    ):
         t      = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
         signal = self._signal(delta_pct / 100.0, qty_ratio, ord_sz_ratio)
         self.rows[symbol] = (
@@ -241,6 +251,7 @@ class SummaryDisplay:
             f"{symbol:<24}"
             f"{delta_pct:>+12.4f}"
             f"{cum_delta:>12}"
+            f"{cum_delta_change_pct:>+18.4f}%"
             f"{qty_ratio:>12.4f}"
             f"{ord_sz_ratio:>12.4f}"
             f"  {signal}"
@@ -426,6 +437,15 @@ class CandleBuilder:
             ):
                 signal = "-1"
         candle["signal"] = signal
+
+        # Cum Delta Change % = ((Current CumDelta - Previous CumDelta) / ABS(Previous CumDelta)) * 100
+        curr_cum_delta = candle.get("aggression", {}).get("cum_delta", 0)
+        prev_cum_delta = prev_candle.get("aggression", {}).get("cum_delta", 0) if prev_candle else 0
+        if prev_candle and prev_cum_delta != 0:
+            pct = ((curr_cum_delta - prev_cum_delta) / abs(prev_cum_delta)) * 100.0
+        else:
+            pct = 0.0
+        candle["aggression"]["cum_delta_change_percentage"] = round(pct, 4)
         return candle
 
     def push(self, raw_tick: dict) -> dict | None:
@@ -640,6 +660,7 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
             sell_pct = agg.get("sell_percentage", 0.0)
             delta_pct = agg.get("delta_percentage", 0.0)
             cum_delta = agg.get("cum_delta", 0)
+            cum_delta_change_pct = agg.get("cum_delta_change_percentage", 0.0)
             signal   = live.get("signal", "0")
 
             display.update_live(
@@ -647,6 +668,7 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
                 f"{symbol}  {ts_txt}  "
                 f"delta_percentage:{delta_pct:+.4f}  "
                 f"cum_delta:{cum_delta}  "
+                f"cum_delta_change_percentage:{cum_delta_change_pct:+.4f}%  "
                 f"buy_percentage:{buy_pct:.4f}  "
                 f"sell_percentage:{sell_pct:.4f}  "
                 f"signal:{signal}",
@@ -657,6 +679,7 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
                 ts           = tick["last_traded_time"],
                 delta_pct    = delta_pct,
                 cum_delta    = cum_delta,
+                cum_delta_change_pct = cum_delta_change_pct,
                 qty_ratio    = limits["qty_ratio"],
                 ord_sz_ratio = limits["order_size_ratio"],
             )

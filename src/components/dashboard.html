@@ -59,7 +59,7 @@
 <table>
   <thead><tr>
     <th>Symbol</th><th>Window (Candle Minutes)</th><th>Buy Volume %</th>
-    <th>Sell Volume %</th><th>Delta %</th><th>Cum Delta</th><th>Signal</th>
+    <th>Sell Volume %</th><th>Delta %</th><th>Cum Delta</th><th>Cum Delta Change %</th><th>Signal</th>
   </tr></thead>
   <tbody id="tbody"></tbody>
 </table>
@@ -93,7 +93,7 @@ function ensureGroup(symbol) {
   const header = document.createElement("tr");
   header.className = "symbol-header";
   header.dataset.group = symbol;
-  header.innerHTML = `<td colspan="7">${symbol}</td>`;
+  header.innerHTML = `<td colspan="8">${symbol}</td>`;
   tbody.appendChild(header);
   symbolGroups.set(symbol, header);
   return header;
@@ -128,6 +128,7 @@ function appendCandleRow(d) {
   const sellPct = d.aggression.sell_percentage ?? 0;
   const deltaPct = d.aggression.delta_percentage ?? 0;
   const cumDelta = d.aggression.cum_delta ?? 0;
+  const cumDeltaChangePct = d.aggression.cum_delta_change_percentage ?? 0;
   const signal = signalLabel(d.signal ?? "0");
   const window = `${d.candle_open || "--:--"}-${d.candle_close || "--:--"}`;
 
@@ -140,6 +141,7 @@ function appendCandleRow(d) {
     <td>${fmt(sellPct, 4)}</td>
     <td>${(deltaPct >= 0 ? "+" : "") + fmt(deltaPct, 4)}</td>
     <td>${cumDelta}</td>
+    <td>${(cumDeltaChangePct >= 0 ? "+" : "") + fmt(cumDeltaChangePct, 4)}%</td>
     <td>${signal}</td>
   `;
 
@@ -163,6 +165,7 @@ function upsertLiveRow(d) {
   const sellPct = d.aggression.sell_percentage ?? 0;
   const deltaPct = d.aggression.delta_percentage ?? 0;
   const cumDelta = d.aggression.cum_delta ?? 0;
+  const cumDeltaChangePct = d.aggression.cum_delta_change_percentage ?? 0;
   const signal = signalLabel(d.signal ?? "0");
   const window = `${d.candle_open || "--:--"}-${d.candle_close || "--:--"}`;
 
@@ -181,6 +184,7 @@ function upsertLiveRow(d) {
     <td>${fmt(sellPct, 4)}</td>
     <td>${(deltaPct >= 0 ? "+" : "") + fmt(deltaPct, 4)}</td>
     <td>${cumDelta}</td>
+    <td>${(cumDeltaChangePct >= 0 ? "+" : "") + fmt(cumDeltaChangePct, 4)}%</td>
     <td>${signal}</td>
   `;
 
