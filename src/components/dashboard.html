@@ -29,16 +29,21 @@
        white-space: nowrap }
   td:first-child, td:nth-child(2) { text-align: left; color: #cbd5e1; font-weight: 500 }
   tr:hover td { background: #131720 }
+  .symbol-header td {
+    background: #0f1720;
+    color: #7dd3fc;
+    font-weight: 700;
+    text-align: left !important;
+    letter-spacing: .04em;
+    border-top: 1px solid #223042;
+    border-bottom: 1px solid #223042;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
 
   .up { color: #4ade80 } .dn { color: #f87171 } .mt { color: #94a3b8 }
   .flash { animation: flash .4s ease-out }
   @keyframes flash { 0%{background:#1e3a2f} 100%{background:transparent} }
-
-  #log { padding: 12px 16px; border-top: 1px solid #1e2530; max-height: 260px;
-         overflow-y: auto }
-  .log-entry { font-size: 11px; color: #94a3b8; border-left: 2px solid #334155;
-               padding: 4px 10px; margin-bottom: 6px }
-  .log-entry .sym { color: #7dd3fc; font-weight: 600 }
 </style>
 </head>
 <body>
@@ -53,94 +58,149 @@
 
 <table>
   <thead><tr>
-    <th>Symbol</th><th>Timestamp</th><th>Aggression</th>
-    <th>Buy %</th><th>Sell %</th><th>Signal</th>
+    <th>Symbol</th><th>Window (Candle Minutes)</th><th>Buy Volume %</th>
+    <th>Sell Volume %</th><th>Delta %</th><th>Cum Delta</th><th>Signal</th>
   </tr></thead>
   <tbody id="tbody"></tbody>
 </table>
 
-<div id="log"><em style="color:#334155;font-size:11px">Closed candles will appear here…</em></div>
-
 <script>
-const SYMBOLS = [
-  "NSE:ASIANPAINT-EQ",
-  "NSE:HEROMOTOCO-EQ"
-];
-
 const tbody = document.getElementById("tbody");
-
-function ensureRow(s) {
-  if (document.getElementById("row-" + s)) return;
-
-  if (!SYMBOLS.includes(s)) {
-    SYMBOLS.push(s);
-  }
-
-  const tr = document.createElement("tr");
-  tr.id = "row-" + s;
-  tr.innerHTML = `
-    <td>${s}</td>
-    <td id="ts-${s}">—</td>
-    <td id="agg-${s}">—</td>
-    <td id="bpct-${s}">—</td>
-    <td id="spct-${s}">—</td>
-    <td id="sig-${s}">0</td>
-  `;
-  tbody.appendChild(tr);
-}
-
-SYMBOLS.forEach(ensureRow);
-
-function clsAgg(v) {
-  return v > 0.3 ? "up" : v < -0.3 ? "dn" : "mt";
-}
+const symbolOrder = [];
+const allowedSymbols = new Set();
+const symbolGroups = new Map();
 
 function fmt(n, dec) { return Number(n).toFixed(dec); }
 
-function applyLive(d) {
-  const s = d.symbol;
-  ensureRow(s);
-
-  const agg = d.aggression.score;
-  const buyPct = d.aggression.buy_percentage ?? 0;
-  const sellPct = d.aggression.sell_percentage ?? 0;
-  const signal = d.signal ?? "0";
-  const ts = d.timestamp || "—";
-
-  document.getElementById(`ts-${s}`).textContent = ts;
-
-  const aggEl = document.getElementById(`agg-${s}`);
-  aggEl.className = clsAgg(agg);
-  aggEl.textContent = (agg >= 0 ? "+" : "") + fmt(agg, 4);
-
-  document.getElementById(`bpct-${s}`).textContent = fmt(buyPct, 4);
-  document.getElementById(`spct-${s}`).textContent = fmt(sellPct, 4);
-  document.getElementById(`sig-${s}`).textContent = String(signal);
-
-  const row = document.getElementById("row-" + s);
-  row.classList.remove("flash");
-  void row.offsetWidth;
-  row.classList.add("flash");
+function signalLabel(signal) {
+  if (String(signal) === "1") return "BUY";
+  if (String(signal) === "-1") return "SELL";
+  return "NEUTRAL";
 }
 
-function appendClosed(d) {
-  ensureRow(d.symbol);
-  const log = document.getElementById("log");
-  if (log.querySelector("em")) log.innerHTML = "";
-  const agg = d.aggression.score;
+function isAllowedSymbol(symbol) {
+  if (allowedSymbols.size === 0) return true;
+  return allowedSymbols.has(symbol);
+}
+
+function ensureSymbolOrder(symbol) {
+  if (!symbolOrder.includes(symbol)) symbolOrder.push(symbol);
+}
+
+function ensureGroup(symbol) {
+  if (symbolGroups.has(symbol)) return symbolGroups.get(symbol);
+
+  const header = document.createElement("tr");
+  header.className = "symbol-header";
+  header.dataset.group = symbol;
+  header.innerHTML = `<td colspan="7">${symbol}</td>`;
+  tbody.appendChild(header);
+  symbolGroups.set(symbol, header);
+  return header;
+}
+
+function reorderGroups() {
+  const rowsBySymbol = new Map();
+  Array.from(tbody.children).forEach(node => {
+    if (node.classList && node.classList.contains("symbol-header")) return;
+    const symbol = node.dataset?.group;
+    if (!symbol) return;
+    if (!rowsBySymbol.has(symbol)) rowsBySymbol.set(symbol, []);
+    rowsBySymbol.get(symbol).push(node);
+  });
+
+  tbody.innerHTML = "";
+
+  symbolOrder.forEach(symbol => {
+    const header = ensureGroup(symbol);
+    tbody.appendChild(header);
+    const rows = rowsBySymbol.get(symbol) || [];
+    rows.forEach(row => tbody.appendChild(row));
+  });
+}
+
+function appendCandleRow(d) {
+  if (!isAllowedSymbol(d.symbol)) return;
+  ensureSymbolOrder(d.symbol);
+  const groupHeader = ensureGroup(d.symbol);
+
   const buyPct = d.aggression.buy_percentage ?? 0;
   const sellPct = d.aggression.sell_percentage ?? 0;
-  const signal = d.signal ?? "0";
-  const ts = d.timestamp || "—";
-  const div = document.createElement("div");
-  div.className = "log-entry";
-  div.innerHTML =
-    `<span class="sym">${d.symbol}</span>  ${ts}  ` +
-    `aggression:${(agg >= 0 ? "+" : "") + Number(agg).toFixed(4)}  ` +
-    `buy_percentage:${Number(buyPct).toFixed(4)}  ` +
-    `sell_percentage:${Number(sellPct).toFixed(4)}  ` +
-    `signal:${signal}`;
-  log.prepend(div);
+  const deltaPct = d.aggression.delta_percentage ?? 0;
+  const cumDelta = d.aggression.cum_delta ?? 0;
+  const signal = signalLabel(d.signal ?? "0");
+  const window = `${d.candle_open || "--:--"}-${d.candle_close || "--:--"}`;
+
+  const tr = document.createElement("tr");
+  tr.dataset.group = d.symbol;
+  tr.innerHTML = `
+    <td></td>
+    <td>${window}</td>
+    <td>${fmt(buyPct, 4)}</td>
+    <td>${fmt(sellPct, 4)}</td>
+    <td>${(deltaPct >= 0 ? "+" : "") + fmt(deltaPct, 4)}</td>
+    <td>${cumDelta}</td>
+    <td>${signal}</td>
+  `;
+
+  // Keep the per-symbol live row always at the top (right after header).
+  // Closed candles should stack below the live row.
+  const liveRow = tbody.querySelector(`tr[data-live="1"][data-group="${d.symbol}"]`);
+  const insertBeforeNode = liveRow ? liveRow.nextSibling : groupHeader.nextSibling;
+  tbody.insertBefore(tr, insertBeforeNode);
+
+  tr.classList.remove("flash");
+  void tr.offsetWidth;
+  tr.classList.add("flash");
+}
+
+function upsertLiveRow(d) {
+  if (!isAllowedSymbol(d.symbol)) return;
+  ensureSymbolOrder(d.symbol);
+  const groupHeader = ensureGroup(d.symbol);
+
+  const buyPct = d.aggression.buy_percentage ?? 0;
+  const sellPct = d.aggression.sell_percentage ?? 0;
+  const deltaPct = d.aggression.delta_percentage ?? 0;
+  const cumDelta = d.aggression.cum_delta ?? 0;
+  const signal = signalLabel(d.signal ?? "0");
+  const window = `${d.candle_open || "--:--"}-${d.candle_close || "--:--"}`;
+
+  let tr = tbody.querySelector(`tr[data-live="1"][data-group="${d.symbol}"]`);
+  if (!tr) {
+    tr = document.createElement("tr");
+    tr.dataset.group = d.symbol;
+    tr.dataset.live = "1";
+    tbody.insertBefore(tr, groupHeader.nextSibling);
+  }
+
+  tr.innerHTML = `
+    <td></td>
+    <td>${window}</td>
+    <td>${fmt(buyPct, 4)}</td>
+    <td>${fmt(sellPct, 4)}</td>
+    <td>${(deltaPct >= 0 ? "+" : "") + fmt(deltaPct, 4)}</td>
+    <td>${cumDelta}</td>
+    <td>${signal}</td>
+  `;
+
+  tr.classList.remove("flash");
+  void tr.offsetWidth;
+  tr.classList.add("flash");
+}
+
+function applySymbols(msg) {
+  if (!Array.isArray(msg.symbols)) return;
+  allowedSymbols.clear();
+  msg.symbols.forEach(s => {
+    if (typeof s === "string" && s.trim()) {
+      const sym = s.trim();
+      allowedSymbols.add(sym);
+      ensureSymbolOrder(sym);
+      ensureGroup(sym);
+    }
+  });
+  reorderGroups();
 }
 
 function connect() {
@@ -159,8 +219,9 @@ function connect() {
   es.onmessage = e => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === "live") applyLive(msg);
-      if (msg.type === "closed") appendClosed(msg);
+      if (msg.type === "symbols") applySymbols(msg);
+      if (msg.type === "closed") appendCandleRow(msg);
+      if (msg.type === "live") upsertLiveRow(msg);
       if (msg.type === "status") lbl.textContent = msg.text;
     } catch {}
   };

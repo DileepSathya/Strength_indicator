@@ -207,12 +207,13 @@ class SummaryDisplay:
     HEADER = (
         f"{'Time':<10}"
         f"{'Symbol':<24}"
-        f"{'Aggression':>12}"
+        f"{'DeltaPct':>12}"
+        f"{'CumDelta':>12}"
         f"{'QtyRatio':>12}"
         f"{'OrdSzRatio':>12}"
         f"  {'Signal'}"
     )
-    SEP = "-" * 78
+    SEP = "-" * 90
 
     def __init__(self, symbols: list[str], summary_file: Path, tty_path: str | None = None):
         self.symbols      = symbols
@@ -232,13 +233,14 @@ class SummaryDisplay:
             return "[SELL BIAS]"
         return "[NEUTRAL  ]"
 
-    def update(self, symbol: str, ts: int, agg: float, qty_ratio: float, ord_sz_ratio: float):
+    def update(self, symbol: str, ts: int, delta_pct: float, cum_delta: int, qty_ratio: float, ord_sz_ratio: float):
         t      = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
-        signal = self._signal(agg, qty_ratio, ord_sz_ratio)
+        signal = self._signal(delta_pct / 100.0, qty_ratio, ord_sz_ratio)
         self.rows[symbol] = (
             f"{t:<10}"
             f"{symbol:<24}"
-            f"{agg:>+12.4f}"
+            f"{delta_pct:>+12.4f}"
+            f"{cum_delta:>12}"
             f"{qty_ratio:>12.4f}"
             f"{ord_sz_ratio:>12.4f}"
             f"  {signal}"
@@ -304,6 +306,7 @@ class CandleBuilder:
         self.prev_ltp        = None
         self.last_direction  = None
         self.last_vol_traded = None
+        self.cum_delta       = 0
 
     def _candle_bucket(self, ts: int) -> int:
         return (ts // self.candle_seconds) * self.candle_seconds
@@ -337,8 +340,9 @@ class CandleBuilder:
         valid      = [t for t in ticks if t["aggressor"] != "UNKNOWN"]
         buy_vol    = sum(t["vol_delta"] for t in valid if t["aggressor"] == "BUY")
         sell_vol   = sum(t["vol_delta"] for t in valid if t["aggressor"] == "SELL")
-        total_aggr = buy_vol + sell_vol
-        score      = round((buy_vol - sell_vol) / total_aggr, 4) if total_aggr > 0 else 0.0
+        delta      = buy_vol - sell_vol
+        delta_pct  = round((delta / volume) * 100, 4) if volume > 0 else 0.0
+        live_cum_delta = self.cum_delta + delta
         if volume <= 0:
             buy_pct, sell_pct = 0.0, 0.0
         else:
@@ -373,9 +377,11 @@ class CandleBuilder:
                 "volume": volume,
             },
             "aggression": {
-                "score":            score,
                 "buy_volume":       buy_vol,
                 "sell_volume":      sell_vol,
+                "delta":            delta,
+                "delta_percentage": delta_pct,
+                "cum_delta":        live_cum_delta,
                 "buy_percentage":   buy_pct,
                 "sell_percentage":  sell_pct,
             },
@@ -431,6 +437,7 @@ class CandleBuilder:
             closed_candle = self._build_candle(self.current_bucket, self.ticks)
             prev_candle = self.closed_candles[-1] if self.closed_candles else None
             closed_candle = self._apply_signal(closed_candle, prev_candle)
+            self.cum_delta = closed_candle["aggression"].get("cum_delta", self.cum_delta)
             self.closed_candles.append(closed_candle)
             self.ticks = []
 
@@ -627,17 +634,19 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
         if live:
             agg      = live["aggression"]
             limits   = live["limit_orders"]
-            score    = agg["score"]
             progress = builder.candle_progress()
             ts_txt   = datetime.fromtimestamp(tick["last_traded_time"]).strftime("%Y-%m-%d %H:%M:%S")
             buy_pct  = agg.get("buy_percentage", 0.0)
             sell_pct = agg.get("sell_percentage", 0.0)
+            delta_pct = agg.get("delta_percentage", 0.0)
+            cum_delta = agg.get("cum_delta", 0)
             signal   = live.get("signal", "0")
 
             display.update_live(
                 symbol,
                 f"{symbol}  {ts_txt}  "
-                f"aggression:{score:+.4f}  "
+                f"delta_percentage:{delta_pct:+.4f}  "
+                f"cum_delta:{cum_delta}  "
                 f"buy_percentage:{buy_pct:.4f}  "
                 f"sell_percentage:{sell_pct:.4f}  "
                 f"signal:{signal}",
@@ -646,7 +655,8 @@ def run_live_market_stream(summary_tty: str | None = None) -> None:
             summary.update(
                 symbol       = symbol,
                 ts           = tick["last_traded_time"],
-                agg          = score,
+                delta_pct    = delta_pct,
+                cum_delta    = cum_delta,
                 qty_ratio    = limits["qty_ratio"],
                 ord_sz_ratio = limits["order_size_ratio"],
             )

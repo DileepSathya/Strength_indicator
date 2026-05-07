@@ -66,12 +66,6 @@ def build_1min_candles(ticks: list[dict]) -> list[dict]:
         valid = [t for t in bucket if t["aggressor"] != "UNKNOWN"]
         buy_vol = sum(t["vol_delta"] for t in valid if t["aggressor"] == "BUY")
         sell_vol = sum(t["vol_delta"] for t in valid if t["aggressor"] == "SELL")
-        total_aggr_vol = buy_vol + sell_vol
-        aggression_score = (
-            round((buy_vol - sell_vol) / total_aggr_vol, 4)
-            if total_aggr_vol > 0
-            else 0.0
-        )
         if volume <= 0:
             buy_pct, sell_pct = 0.0, 0.0
         else:
@@ -100,7 +94,6 @@ def build_1min_candles(ticks: list[dict]) -> list[dict]:
                     "volume": volume,
                 },
                 "aggression": {
-                    "score": aggression_score,
                     "buy_volume": buy_vol,
                     "sell_volume": sell_vol,
                     "buy_percentage": buy_pct,
